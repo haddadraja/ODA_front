@@ -4,6 +4,8 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
+import android.graphics.Rect;
+import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.os.Bundle;
 import android.util.Log;
@@ -21,6 +23,17 @@ import com.palo.oda.R;
 import com.palo.oda.service.UDP_Client;
 import com.tbruyelle.rxpermissions2.RxPermissions;
 
+import java.io.ByteArrayOutputStream;
+import java.net.SocketException;
+import java.net.UnknownHostException;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import static androidx.constraintlayout.widget.Constraints.TAG;
 
 public class CameraFragment extends Fragment {
@@ -29,16 +42,29 @@ public class CameraFragment extends Fragment {
     private RxPermissions rxPermissions;
     private Camera camera;
     private Preview preview;
-    private UDP_Client udp_client = new UDP_Client();
+    private byte[] message;
+    private UDP_Client udp_client;
+    private Size size = new Size(500,500);
+    private ByteArrayOutputStream baos;
 
-    public static CameraFragment newInstance() {
+    public CameraFragment() throws SocketException, UnknownHostException {
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    static class Size{
+       private int height;
+       private int width;
+    }
+    public static CameraFragment newInstance() throws SocketException, UnknownHostException {
         return new CameraFragment();
     }
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        udp_client = new UDP_Client(message);
         rxPermissions = new RxPermissions(this);
         rxPermissions
                 .request(Manifest.permission.CAMERA)
@@ -50,17 +76,10 @@ public class CameraFragment extends Fragment {
                                         camera = Camera.open(Camera.CameraInfo.CAMERA_FACING_FRONT);
                                         Camera.Parameters parameters = camera.getParameters();
                                         parameters.setPreviewFormat(ImageFormat.JPEG);
-                                        parameters.setPreviewSize(300, 300);
+                                        parameters.setPreviewSize(1280, 720);
                                         parameters.setPreviewFrameRate(10);
                                         startThread();
-                                        camera.setPreviewCallback(new Camera.PreviewCallback() {
-                                            @Override
-                                            public void onPreviewFrame(byte[] bytes, Camera camera) {
-                                                Log.i(TAG, "onPreviewFrame: " + bytes.length);
-                                                udp_client.Message = bytes;
-                                            }
-                                        });
-
+                                        camera.setPreviewCallback(byteCameraBiConsumer());
                                     }
                                 });
                     }
@@ -111,5 +130,20 @@ public class CameraFragment extends Fragment {
             // no camera on this device
             return false;
         }
+    }
+
+    private Camera.PreviewCallback byteCameraBiConsumer(){
+        return (bytes, camera) -> {
+            //Log.i(TAG, "onPreviewFrame: " + bytes.length);
+            YuvImage image = new YuvImage(bytes, ImageFormat.NV21,
+                    size.width, size.height, null);
+            baos = new ByteArrayOutputStream();
+            int jpeg_quality = 80;
+            image.compressToJpeg(new Rect(0, 0, size.width, size.height),
+                    jpeg_quality, baos);
+
+            udp_client.message = baos.toByteArray();
+            //Log.i(TAG, "onPreviewFrame image traitement: " + baos.toByteArray().length);
+        };
     }
 }
