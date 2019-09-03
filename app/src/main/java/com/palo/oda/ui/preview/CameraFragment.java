@@ -7,7 +7,10 @@ import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.Camera;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -19,6 +22,7 @@ import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProviders;
 
+import com.palo.oda.MainActivity;
 import com.palo.oda.R;
 import com.palo.oda.service.UDP_Client;
 import com.tbruyelle.rxpermissions2.RxPermissions;
@@ -44,19 +48,11 @@ public class CameraFragment extends Fragment {
     private Preview preview;
     private byte[] message;
     private UDP_Client udp_client;
-    private Size size = new Size(500,500);
     private ByteArrayOutputStream baos;
-
+    private UdpClientHandler udpClientHandler;
     public CameraFragment() throws SocketException, UnknownHostException {
     }
 
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    static class Size{
-       private int height;
-       private int width;
-    }
     public static CameraFragment newInstance() throws SocketException, UnknownHostException {
         return new CameraFragment();
     }
@@ -64,7 +60,6 @@ public class CameraFragment extends Fragment {
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        udp_client = new UDP_Client(message);
         rxPermissions = new RxPermissions(this);
         rxPermissions
                 .request(Manifest.permission.CAMERA)
@@ -74,12 +69,18 @@ public class CameraFragment extends Fragment {
                                 .subscribe(granted2 -> {
                                     if (granted2) {
                                         camera = Camera.open(Camera.CameraInfo.CAMERA_FACING_FRONT);
-                                        Camera.Parameters parameters = camera.getParameters();
-                                        parameters.setPreviewFormat(ImageFormat.JPEG);
-                                        parameters.setPreviewSize(1280, 720);
-                                        parameters.setPreviewFrameRate(10);
-                                        startThread();
-                                        camera.setPreviewCallback(byteCameraBiConsumer());
+                                        new AsyncTask<Void,Void,Void>() {
+                                            @Override
+                                            protected Void doInBackground(Void... voids) {
+                                                try {
+                                                    new UDP_Client(camera).start();
+                                                } catch (SocketException e) {
+                                                    e.printStackTrace();
+                                                }
+                                                return null;
+                                            }
+                                        }.execute();
+
                                     }
                                 });
                     }
@@ -87,8 +88,8 @@ public class CameraFragment extends Fragment {
                 });
     }
 
-    private void startThread() {
-        udp_client.start();
+    public synchronized byte[] getMessage() {
+        return message;
     }
 
     @Override
@@ -114,6 +115,7 @@ public class CameraFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
+        udpClientHandler = new UdpClientHandler(this);
 
     }
 
@@ -131,19 +133,35 @@ public class CameraFragment extends Fragment {
             return false;
         }
     }
+    public static class UdpClientHandler extends Handler {
+        public static final int UPDATE_STATE = 0;
+        public static final int UPDATE_MSG = 1;
+        public static final int UPDATE_END = 2;
+        private CameraFragment parent;
 
-    private Camera.PreviewCallback byteCameraBiConsumer(){
-        return (bytes, camera) -> {
-            //Log.i(TAG, "onPreviewFrame: " + bytes.length);
-            YuvImage image = new YuvImage(bytes, ImageFormat.NV21,
-                    size.width, size.height, null);
-            baos = new ByteArrayOutputStream();
-            int jpeg_quality = 80;
-            image.compressToJpeg(new Rect(0, 0, size.width, size.height),
-                    jpeg_quality, baos);
+        public UdpClientHandler(CameraFragment parent) {
+            super();
+            this.parent = parent;
+        }
 
-            udp_client.message = baos.toByteArray();
-            //Log.i(TAG, "onPreviewFrame image traitement: " + baos.toByteArray().length);
-        };
-    }
+        @Override
+        public void handleMessage(Message msg) {
+
+            switch (msg.what){
+                case UPDATE_STATE:
+                    parent.updateState((String)msg.obj);
+                    break;
+                case UPDATE_MSG:
+                    parent.updateRxMsg((String)msg.obj);
+                    break;
+                case UPDATE_END:
+                    parent.clientEnd();
+                    break;
+                default:
+                    super.handleMessage(msg);
+            }
+
+        }
+
+
 }
